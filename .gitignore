@@ -1,0 +1,10 @@
+__pycache__
+.ipynb_checkpoints
+mp3s
+carriers
+*.mat
+*.tky
+*.mp3
+NES
+*.pth
+output*
