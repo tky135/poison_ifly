@@ -104,8 +104,10 @@ def au2voiceprint(x, sr, model, device, num_mel_bins = c.FILTER_BANK):
 
 def loss_func(vp, victim_vp, attacker_vp, alpha = 1):
     beta = alpha/(alpha+1)
-    loss = beta*(1-cosine_similarity2(vp, victim_vp, 1e-6)) \
-        + (1-beta)*(1-cosine_similarity2(vp, attacker_vp, 1e-6))
+    victim_dist = (1-cosine_similarity2(vp, victim_vp, 1e-6))
+    attacker_dist = (1-cosine_similarity2(vp, attacker_vp, 1e-6))
+    loss = beta* victim_dist\
+        + (1-beta)* attacker_dist# + 1 * (victim_dist - attacker_dist) ** 2
 
     return torch.mean(loss)
 

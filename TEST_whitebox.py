@@ -768,7 +768,7 @@ def generate(dataset, attacker_id, victim_id, sound_index=0, SNR_sx=10, nr_of_vu
         # people_list[0] is the fix role
         people_list = ['6930', '4077', '61', '260', '121', '1284', '2961']# 4077,61,260: M; 121,237,2961: F   # 6930, M
         attacker = people_list[attacker_id]
-        victim1, victim2 = '4077', '2961'
+        victim1, victim2 = '1284', '1284'
 
         enrolled_speakers = ['237', '5105', '1580', '7176', '2300'] #'237'F, '5105'M, '1580'F, '7176'M, '2300'M
         dataset_path = '/home/jiangyi/Datasets/LibriSpeech/test-clean/'
@@ -921,7 +921,7 @@ def generate(dataset, attacker_id, victim_id, sound_index=0, SNR_sx=10, nr_of_vu
                         home_path = home_path,
                         sr = sr,
                         history = home_path+'/history/',
-                        epoch = 500,
+                        epoch = 250,
                         SNR_lb = SNR_sx,
                         alpha = 256/2**16, # 16
                         loss_ub = 0.25,
