@@ -46,7 +46,7 @@ def generate(dataset, attacker_id, victim_id, sound_index=0, SNR_sx=10, nr_of_vu
         attacker = '6930'
         #################################################################
         ### change victim1
-        victim1, victim2 = '260', '61'
+        victim1, victim2 = '2961', '2961'
         #################################################################
 
         enrolled_speakers = ['237', '5105', '1580', '7176', '2300'] #'237'F, '5105'M, '1580'F, '7176'M, '2300'M

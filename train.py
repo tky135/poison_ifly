@@ -346,7 +346,7 @@ def poison_seg_two(
                                 - orig_sd
 
             # adv_x = (x - alpha2*shaping*x.grad.sign()/batch_num).detach_()
-        print("batch: %d" % i, np.mean(losses1), np.mean(losses2))
+        print("epoch: %d" % i, np.mean(losses1), np.mean(losses2))
         # print(loss1.item())
         losses.append((np.mean(losses1) + np.mean(losses2)) / 2) 
         # end of epoch
@@ -771,7 +771,7 @@ def generate(dataset, attacker_id, victim_id, sound_index=0, SNR_sx=10, nr_of_vu
         people_list = ['6930', '4077', '61', '260', '121', '1284', '2961']# 4077,61,260: M; 121,237,2961: F   # 6930, M
         attacker = '6930'
         ######################################
-        victim1, victim2 = '2961', '2961'
+        victim1, victim2 = '4077', '4077'
         ######################################
 
         enrolled_speakers = ['237', '5105', '1580', '7176', '2300'] #'237'F, '5105'M, '1580'F, '7176'M, '2300'M
