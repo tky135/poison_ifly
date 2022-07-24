@@ -107,9 +107,10 @@ def loss_func(vp, victim_vp, attacker_vp, alpha = 1):
     victim_dist = (1-cosine_similarity2(vp, victim_vp, 1e-6))
     attacker_dist = (1-cosine_similarity2(vp, attacker_vp, 1e-6))
     loss = beta* victim_dist\
-        + (1-beta)* attacker_dist# + 1 * (victim_dist - attacker_dist) ** 2
+        + (1-beta)*attacker_dist# + 1 * (victim_dist - attacker_dist) ** 2
+    # print("(%f, %f)" % (torch.mean(victim_dist), torch.mean(attacker_dist)), end=",")
 
-    return torch.mean(loss)
+    return torch.mean(loss), torch.mean(victim_dist).item(), torch.mean(attacker_dist).item()
 
 def loss_func_keep(vp, victim_vp, attacker_vp, alpha = 1):
     beta = alpha/(alpha+1)
