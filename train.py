@@ -247,6 +247,7 @@ def poison_seg_two(
         
         losses1, losses2 = [], []
         # cumulate gradient for victim 1
+        v_distlist1, a_distlist1, v_distlist2, a_distlist2 = [], [], [], []
         for batch_idx in range(batch_num1):
             x.requires_grad_(True)
             x_1 = orig_sd + x
@@ -277,13 +278,15 @@ def poison_seg_two(
 
             vp = au2voiceprint(x_stack, sr, model, device)
             model.zero_grad()
-            loss1 = loss_func(
+            loss1, v_dist1, a_dist1 = loss_func(
                         vp, 
                         victim1_vp, 
                         attacker_vp, 
                         victim_weight
-                    ).to(device)
-
+                    )
+            loss1 = loss1.to(device)
+            v_distlist1.append(v_dist1)
+            a_distlist1.append(a_dist1)
             # loss1.backward()
             # losses1.append(loss1.item())
 
@@ -314,12 +317,16 @@ def poison_seg_two(
 
             vp = au2voiceprint(x_stack, sr, model, device)
             model.zero_grad()
-            loss2 = loss_func(
+            loss2, v_dist2, a_dist2 = loss_func(
                         vp, 
                         victim2_vp, 
                         attacker_vp, 
                         victim_weight
-                    ).to(device)
+                    )
+            v_distlist2.append(v_dist2)
+            a_distlist2.append(a_dist2)
+            loss2 = loss2.to(device)
+
             loss = loss1 + loss2
             loss.backward()
 
@@ -346,7 +353,7 @@ def poison_seg_two(
                                 - orig_sd
 
             # adv_x = (x - alpha2*shaping*x.grad.sign()/batch_num).detach_()
-        print("epoch: %d" % i, np.mean(losses1), np.mean(losses2))
+        print("epoch: %d v_dist1: %f a_dist1: %f loss1: %f v_dist2: %f a_dist2: %f loss2: %f" % (i, np.mean(v_distlist1), np.mean(a_distlist1), np.mean(losses1), np.mean(v_distlist2), np.mean(a_distlist2), np.mean(losses2)))
         # print(loss1.item())
         losses.append((np.mean(losses1) + np.mean(losses2)) / 2) 
         # end of epoch
@@ -771,7 +778,7 @@ def generate(dataset, attacker_id, victim_id, sound_index=0, SNR_sx=10, nr_of_vu
         people_list = ['6930', '4077', '61', '260', '121', '1284', '2961']# 4077,61,260: M; 121,237,2961: F   # 6930, M
         attacker = '6930'
         ######################################
-        victim1, victim2 = '4077', '4077'
+        victim1, victim2 = '260', '61'
         ######################################
 
         enrolled_speakers = ['237', '5105', '1580', '7176', '2300'] #'237'F, '5105'M, '1580'F, '7176'M, '2300'M
@@ -913,13 +920,13 @@ def generate(dataset, attacker_id, victim_id, sound_index=0, SNR_sx=10, nr_of_vu
         vu1 = vu[victim1][0:nr_of_vu, :, :]
         vu2 = vu[victim2][0:nr_of_vu, :, :]
 
-        ps_x, hy = poison_seg(
+        ps_x, hy = poison_seg_two(
                         song_seg,
                         victim1_vp,
-                        # victim2_vp,
+                        victim2_vp,
                         attacker_vp,
                         vu1,
-                        # vu2,
+                        vu2,
                         dsi.model,
                         dsi.device,
                         home_path = home_path,
