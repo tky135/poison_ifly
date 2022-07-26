@@ -43,10 +43,10 @@ def generate(dataset, attacker_id, victim_id, sound_index=0, SNR_sx=10, nr_of_vu
     if DT == 'LB':
         # people_list[0] is the fix role
         people_list = ['6930', '4077', '61', '260', '121', '1284', '2961']# 4077,61,260: M; 121,237,2961: F   # 6930, M
-        attacker = '6930'
+        attacker = '260'
         #################################################################
         ### change victim1
-        victim1, victim2 = '2961', '2961'
+        victim1, victim2 = '6930', '6930'
         #################################################################
 
         enrolled_speakers = ['237', '5105', '1580', '7176', '2300'] #'237'F, '5105'M, '1580'F, '7176'M, '2300'M
@@ -123,7 +123,10 @@ def generate(dataset, attacker_id, victim_id, sound_index=0, SNR_sx=10, nr_of_vu
     victim_spks = read_librispeech_structure(victim_corpus, True, '/*.npy')
 
     attacker_spks = read_librispeech_structure(attacker_path, True, '/*.npy')
-
+    # select attacker
+    attacker_spks = [i for i in attacker_spks if i['speaker_id'] == attacker]
+    # print(attacker_spks)
+    # raise Exception("break")
     dsi = DeepSpeakerIden(device, nrof_utte_each, resume, 
                           voiceprint_root=voiceprint_root, 
                           enrolled_files = train_path, filelist = train_spks)
