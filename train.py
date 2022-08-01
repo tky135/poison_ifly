@@ -639,6 +639,8 @@ def poison_seg_multiple(
             x_1 = orig_sd + x
 
             # get loss for the first victim
+            ### improve record loss from each victim and balance
+            mini_victim_losses = torch.zeros((len(victim_vps),))
             for v in range(len(victim_vps)):
                 vu_batch = vu[v][batch_idx*batch_size:(batch_idx+1)*batch_size, :]
                 x_rir0 = torch.vstack([0.2*x_1+vu_batch, 2*x_1+vu_batch])
@@ -675,7 +677,19 @@ def poison_seg_multiple(
                 v_distlists[v].append(v_dist)
                 a_distlists[v].append(a_dist)
                 losses_victims[v].append(loss.item())
-                loss.backward()
+            ### without victim balancing
+                # loss.backward()
+            ########################
+
+            ### with victim balancing
+                mini_victim_losses[v] = loss
+            # mini_victim_losses_tensor = torch.tensor(mini_victim_losses)
+            # print(mini_victim_losses)
+            # print((mini_victim_losses - torch.mean(mini_victim_losses)) ** 2)
+            # raise Exception("break")
+            final_loss = torch.sum(mini_victim_losses) + 10 * torch.sum((mini_victim_losses - torch.mean(mini_victim_losses)) ** 2)
+            final_loss.backward()
+            ##########################
 
             # get loss for the second victim
 
@@ -1127,7 +1141,7 @@ def generate(dataset, attacker_id, victim_id, sound_index=0, SNR_sx=10, nr_of_vu
         attacker = '6930'
         ######################################
         victim1, victim2 = '2961', '61'
-        victims = ['2961', '61']
+        victims = ['2961', '4077']
         print("victims: ", victims)
         ######################################
 
