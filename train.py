@@ -37,7 +37,7 @@ home_path = "./NES/"
 mkdir(home_path)
 
 
-# In[ ]:
+
 def poison_seg_two(
     song_seg, 
     victim1_vp,
@@ -444,6 +444,354 @@ def poison_seg_two(
 
     return x.detach().cpu().numpy(), hy
 
+def poison_seg_multiple(
+    # victims, # list of victim names
+    song_seg, 
+    victim_vps, # list of victim vps
+
+    attacker_vp,
+    victim_corpuses, # list of victim corpuses
+
+    model,
+    device, 
+    home_path,
+    sr = 1.6e3, 
+    history = './',
+    epoch = 2000, 
+    SNR_lb = 20.0,
+    alpha = 64/(2**16-1), 
+    loss_ub = 0.25,
+    victim_weight = 1,
+    patience =20,
+    sub_patience = 5,
+    SNR_dec_max = 5,
+    plot_figure = True,
+    report_frequency = 50,
+    verbose = False,
+    x0 = None,
+    seg_winlen = 25840,
+    stride = 3200,
+    RIR = None,
+    DA_mu = 0.4,
+    DA_sigma = 0.1,
+    batch_size = 500, 
+    lr = 5e3
+):
+
+    """
+    Generate perturbation of PoiSong for digital backdoor attack 
+    on the enrollment phase.
+    
+    Aruguments
+    ----------
+    song_seg : ndarray [1, seg]
+        The carrier of PoiSong.
+    victim1_vp : torch.Tensor [1, 512]
+        The average voiceprint of the first victim.
+    victim2_vp : torch.Tensor [1, 512]
+        The average voiceprint of the second victim. 
+    attacker_vp : torch.Tensor [1, 512]
+        The average voiceprint of the attacker.
+    victim_corpus : dict
+        A corpus of victim.
+    model : torch.nn.Module/torch.nn.DataParallel
+        The front-end model. The encoder maps an utterance 
+        to an embedding.
+    device : torch.device
+        The device used.
+    home_path : str
+        The working directory.
+    sr : float (default: 1.6e3)
+        The sampling rate.
+    history : str (default: './')
+        The path to save the training histories and figures.
+    epoch : int (default: 2000)
+        The number of epoch of training.
+    SNR_lb : float (default: 20.0)
+        The lower bound of SNR between song_seg and x.
+    alpha : float (default: 64/(2**16-1))
+        The learning rate.
+    loss_ub : float (default: 0.25)
+        The upperbound of loss. Training stops when the loss
+        is less than the upperbound.
+    victim_weight : float (default: 1.0)
+        The weight of the distance from victim's voiceprint 
+        in the loss function versus the from attacker's.
+    patience : int (default: 20)
+        The patience of the EarlyStop method. the training 
+        ends when the loss function does not decrease for so
+        many consecutive epochs.
+    sub_patience : int (default: 5)
+        SNR_lb decreases when the loss function does not 
+        decrease for so many consecutive epochs.
+    SNR_dec_max : int (default: 5)
+        The maximum times that SNR_lb can decreases.
+    plot_figure : bool (default: True)
+        Whether plot figures.
+    report_frequency : int (default: 50)
+        The frequency reporting the loss values.
+    verbose : bool (default: False)
+        Whether generate a process bar and print the information
+        of the result at the end of the training process. If
+        verbose=False, then figures are not plotted. Setting
+        plot_figure=True will not work.
+    x0 : ndarray [1, seg] (default: None)
+        A initial value of x. If x0=None, x is assigned a random
+        array.
+    seg_winlen: int (default: 25840)
+        The sliding window length for forwarding.
+    stride: int (default: 3200)
+        The stride of sliding window for forwarding.
+    
+    Returns
+    ----------
+    x : ndarray [1, seg]
+        return x.detach().cpu().numpy().
+    hy : dict   {'loss', 'SNR', 's_v', 's_a'}
+        return the history of training, including loss, SNR, 
+        the distance from victim, the distance from attacker.
+    """
+    model.eval()
+    assert(len(victim_corpuses) == len(victim_vps))
+    # original song data
+    orig_sd = song_seg.unsqueeze(0).to(device)*0.5
+    print('orig_sd: ({:.3f}, {:.3f})'.format(orig_sd.min().item(),\
+            orig_sd.max().item()))
+
+    Ess = torch.sum(torch.pow(orig_sd, 2))
+    coeff = 10**(0.05*SNR_lb)/torch.sqrt(Ess)
+    shaping = orig_sd.abs()/orig_sd.abs().max()
+    alpha2 = alpha/shaping.mean()
+    print('alpha2: {} = alpha * {}'.format(alpha2.item(), 1/shaping.mean().item()))
+
+    # initialization of x
+    if x0 is None:
+        x = torch.randn(orig_sd.size()).to(device)
+    else:
+        x = torch.tensor(x0).unsqueeze(0).to(device)
+
+    vu = []
+    for victim_corpus in victim_corpuses:
+        if victim_corpus.size(0) != 0:
+            vu.append(victim_corpus)
+            Ess = torch.sum(torch.pow(orig_sd, 2),\
+                                dim = 2, keepdim=True).cpu()
+            Evu = torch.sum(torch.pow(vu[-1], 2),\
+                                dim = 2, keepdim=True)
+
+            vu[-1] = vu[-1]/torch.sqrt(Evu)*torch.sqrt(Ess*4)\
+                        *(DA_mu+DA_sigma*torch.randn([vu[-1].size(0), 1, 1]))\
+                        *0.5
+
+            # print('Evu:', torch.sqrt(Evu))
+            # print('Ess:', torch.sqrt(Ess))
+            print('victim1_utte({}): ({}, {})'.format(
+                                                    tuple(vu[-1].size()),
+                                                    vu[-1].min().item(),
+                                                    vu[-1].max().item()
+                                                    ))
+            vu[-1] = vu[-1].to(device)
+            
+            E1 = torch.sum(torch.pow(vu[-1], 2), dim=2)
+            E2 = torch.sum(torch.pow(0.2*orig_sd, 2))
+            E3 = torch.sum(torch.pow(2*orig_sd, 2))
+            print('SNR(v1, 0.2*s)', 10*torch.log10(E1/E2)[:5,:])
+            print('SNR(v1, 2*s)', 10*torch.log10(E1/E3)[:5,:])
+        else:
+            raise Exception("break")
+            vu[-1] = 0
+
+    for i in vu:
+        print("vu shape: ", i.shape)
+    print("vu len : %d" % len(vu))
+    
+    # assert utterances of all victims are of the same size
+    assert(len(set([i.shape for i in vu])) == 1)
+    # print(set([i.shape for i in vu]))
+
+    batch_size = batch_size if batch_size < vu[0].size(0) else vu[0].size(0)
+    batch_num =  vu[0].size(0) // batch_size
+
+    losses = []     # recording losses
+    mkdir(history)
+
+    # Optimization Epochs
+    if verbose:
+        t_range = tqdm(range(epoch))    # Display a process bar
+    else:
+        t_range = range(epoch)
+
+    early_stop = EarlyStopping(patience, verbose=True, \
+            parameter_save_path = home_path+'saved_parameters/')
+    SNR_dec = 0     # The times of decreasing the SNR_lb
+    N_subsegs = (x.size(-1)-seg_winlen)//stride # 
+
+    for i in t_range:
+        x.requires_grad = True
+        losses_victims = [[] for v in range(len(victim_vps))]
+        # losses1, losses2 = [], []
+        # cumulate gradient for victim 1
+        v_distlists = [[] for v in range((len(victim_vps)))]
+        a_distlists = [[] for v in range(len(victim_vps))]
+        # v_distlist1, a_distlist1, v_distlist2, a_distlist2 = [], [], [], []
+        for batch_idx in range(batch_num):
+            x.requires_grad_(True)
+            x_1 = orig_sd + x
+
+            # get loss for the first victim
+            for v in range(len(victim_vps)):
+                vu_batch = vu[v][batch_idx*batch_size:(batch_idx+1)*batch_size, :]
+                x_rir0 = torch.vstack([0.2*x_1+vu_batch, 2*x_1+vu_batch])
+           
+                if RIR.size(0) != 0:     # Physical   
+                    RIR = RIR.to(device)
+                    x_rir = F.conv1d(x_rir0, RIR, 
+                                padding='same',
+                                dilation=1)
+                
+                else:                   # Digital
+                    x_rir = x_rir0
+
+                x_rir_batch = torch.reshape(
+                            x_rir, 
+                            (x_rir.size(0)*x_rir.size(1), x_rir.size(2))
+                            ) 
+                x_stack = torch.vstack(
+                            [x_rir_batch[:, j*stride:j*stride+seg_winlen]\
+                            for j in range(N_subsegs)]\
+                            )
+                if i == 0 and batch_idx == 0:
+                    print('x_stack({})'.format(x_stack.shape))
+
+                vp = au2voiceprint(x_stack, sr, model, device)
+                model.zero_grad()
+                loss, v_dist, a_dist = loss_func(
+                            vp, 
+                            victim_vps[v], 
+                            attacker_vp, 
+                            victim_weight
+                        )
+                loss = loss.to(device)
+                v_distlists[v].append(v_dist)
+                a_distlists[v].append(a_dist)
+                losses_victims[v].append(loss.item())
+                loss.backward()
+
+            # get loss for the second victim
+
+            # end of mini batch
+            adv_x = (x - alpha2*shaping*x.grad * lr/(batch_num)).detach_()
+            with torch.no_grad():
+                # print(x.grad[:, :, :3])
+
+                Ex = torch.sum(torch.pow(adv_x, 2))
+
+                if Ex>1/coeff**2:
+                    adv_x = adv_x/(torch.sqrt(Ex)*coeff)
+                else:
+                    adv_x = adv_x/1
+
+                adv_x = torch.round(adv_x*np.iinfo(np.short).max)\
+                                /np.iinfo(np.short).max
+                x = torch.clamp(orig_sd+adv_x, min=-1, max=1).detach_()\
+                            - orig_sd
+
+            # adv_x = (x - alpha2*shaping*x.grad.sign()/batch_num).detach_()
+
+        # end of epoch
+        for v in range(len(victim_vps)):
+            print("epoch: %d v_dist_%d: %.4f a_dist_%d: %.4f loss_%d: %.4f" % (i, (v + 1), np.mean(v_distlists[v]), (v + 1), np.mean(a_distlists[v]), (v + 1), np.mean(losses_victims[v])), end='\t')
+        print()    
+        # print(loss1.item())
+        losses.append(np.mean([np.mean(losses_victims[v]) for v in range(len(victim_vps))])) 
+        # end of epoch
+        with torch.no_grad():
+            # print(x.grad[:, :, :3])
+
+            Ex = torch.sum(torch.pow(adv_x, 2))
+
+            if Ex>1/coeff**2:
+                adv_x = adv_x/(torch.sqrt(Ex)*coeff)
+            else:
+                adv_x = adv_x/1
+
+            adv_x = torch.round(adv_x*np.iinfo(np.short).max)\
+                               /np.iinfo(np.short).max
+            x = torch.clamp(orig_sd+adv_x, min=-1, max=1).detach_()\
+                        - orig_sd
+            early_stop.update(losses[-1], x)     
+
+            if (losses[-1]) < loss_ub:
+                print('epoch: {}, loss achieved.'.format(i))
+                break
+            elif early_stop.early_stop():
+                print("Decreasing learning rate to: ", lr / 2)
+                lr /= 2
+                early_stop.reset_counter()
+                early_stop.stop = False
+                continue
+                # print('epoch: {}, early stopped.'.format(i))
+                # x = early_stop.get_best()
+                # break
+            elif early_stop.get_counter() > sub_patience\
+                                    and SNR_dec < SNR_dec_max:
+                SNR_lb -= 1
+                SNR_dec += 1
+                coeff = 10**(0.05*SNR_lb)/torch.sqrt(Ess)
+                early_stop.reset_counter()
+                print('SNR_lb decreased: {}'.format(SNR_lb))
+
+
+    with torch.no_grad():
+        x_end = (orig_sd + x)[:, :, 8000:-8000]
+        x_end_batch = torch.reshape(
+                    x_end,\
+                    (x_end.size(0)*x_end.size(1), x_end.size(2))\
+                    )
+        vp = au2voiceprint(x_end_batch, sr, model, device)
+        hy = \
+            {'loss': loss.item(),\
+             'SNR': 10*torch.log10(torch.sum(torch.pow(orig_sd, 2))\
+                                    /torch.sum(torch.pow(x, 2))).item(),\
+            #  's_v1': (1-cosine_similarity2(vp, victim1_vp, 1e-6)).item(),\
+            #  's_v2': (1-cosine_similarity2(vp, victim2_vp, 1e-6)).item(),\
+             's_a': (1-cosine_similarity2(vp, attacker_vp, 1e-6)).item()}
+        print('loss: ', hy['loss'])
+        print("SNR(dB): ", hy['SNR'])
+        # print("1-simi to victim1: ", hy['s_v1'])
+        # print("1-simi to victim2: ", hy['s_v2'])
+        print("1-simi to attacker: ", hy['s_a'])
+
+    if verbose:
+        print("Updated X with {} elements, mean {:0.2f}, std {:0.2f}, min {:0.2f}, max {:0.2f}"
+            .format(x.shape[0], x.mean().item(), x.std().item(), x.min().item(), x.max().item()))
+
+        if plot_figure:
+            import matplotlib.pyplot as plt
+            # An original song data
+            plt.subplot(2,2,1)
+            osd = orig_sd.detach().cpu().numpy()
+            plt.plot(osd[0, 0, :])
+            print('orig_sd: ({}, {})'.format(osd.min(), osd.max()))
+
+            # Plot x after gradient updates
+            plt.subplot(2,2,2)
+            plt.plot(x.detach().cpu().numpy()[0, 0, :])
+
+            # Plot changes in x[0][0]
+            plt.subplot(2,2,3)
+            plt.plot((orig_sd + x).detach().cpu().numpy()[0, 0, :])
+
+            # Plot Losses
+            plt.subplot(2,2,4)
+            plt.plot(losses)
+            # print(losses)
+            import time
+            plt.savefig(history+'/Changes_{}.png'\
+                            .format(int(time.time())))
+
+    return x.detach().cpu().numpy(), hy
+
 def poison_seg(
     song_seg, 
     victim_vp,
@@ -776,9 +1124,11 @@ def generate(dataset, attacker_id, victim_id, sound_index=0, SNR_sx=10, nr_of_vu
     if DT == 'LB':
         # people_list[0] is the fix role
         people_list = ['6930', '4077', '61', '260', '121', '1284', '2961']# 4077,61,260: M; 121,237,2961: F   # 6930, M
-        attacker = '260'
+        attacker = '6930'
         ######################################
         victim1, victim2 = '2961', '61'
+        victims = ['2961', '61']
+        print("victims: ", victims)
         ######################################
 
         enrolled_speakers = ['237', '5105', '1580', '7176', '2300'] #'237'F, '5105'M, '1580'F, '7176'M, '2300'M
@@ -885,22 +1235,37 @@ def generate(dataset, attacker_id, victim_id, sound_index=0, SNR_sx=10, nr_of_vu
     import imp
     imp.reload(poisong)
     from poisong import avg_voiceprint, cosine_similarity2
-    victim1_spks = [i for i in victim_spks if i['speaker_id'] == victim1]
-    victim2_spks = [i for i in victim_spks if i['speaker_id'] == victim2]
-    victim1_vp = avg_voiceprint(dsi, victim1_spks)
-    victim2_vp = avg_voiceprint(dsi, victim2_spks)
 
-    prematch1, prematch2 = dsi.match_voiceprint(victim1_vp, 5), dsi.match_voiceprint(victim2_vp, 5)
-    print("victim 1 prematch: ", prematch1[0].tolist(), prematch1[1].tolist())
-    print("victim 2 prematch: ", prematch2[0].tolist(), prematch2[1].tolist())
-
+    # get attacker prematch
     attacker_vp = avg_voiceprint(dsi, attacker_spks)
     prematch = dsi.match_voiceprint(attacker_vp, 5)
     print("attacker prematch: ", prematch[0].tolist(), prematch[1].tolist())
 
-    print('simi between victim1 and attacker:', cosine_similarity2(victim1_vp, attacker_vp, eps = 1.e-6).item())
-    print('simi between victim2 and attacker:', cosine_similarity2(victim2_vp, attacker_vp, eps = 1.e-6).item())
-    print('simi between victim1 and victim2 :', cosine_similarity2(victim1_vp, victim2_vp, eps = 1.e-6).item())
+    # get victim vps and spks and prematches
+    all_victim_spks = [] # not used in train
+    all_victim_vps = []
+    # divide victim corpuses
+    for v in range(len(victims)):
+        vs = [i for i in victim_spks if i['speaker_id'] == victims[v]]
+        all_victim_spks.append(vs)
+        all_victim_vps.append(avg_voiceprint(dsi, vs))
+        prematch = dsi.match_voiceprint(all_victim_vps[-1], 5)
+        print("victim %d(%s) prematch: " % (v + 1, victims[v]), prematch[0].tolist(), prematch[1].tolist())
+        print("simi between victim %d(%s) and attacker: " % (v + 1, victims[v]), cosine_similarity2(all_victim_vps[-1], attacker_vp, eps = 1.e-6).item())
+
+    # victim1_spks = [i for i in victim_spks if i['speaker_id'] == victim1]
+    # victim2_spks = [i for i in victim_spks if i['speaker_id'] == victim2]
+    # victim1_vp = avg_voiceprint(dsi, victim1_spks)
+    # victim2_vp = avg_voiceprint(dsi, victim2_spks)
+
+    # prematch1, prematch2 = dsi.match_voiceprint(victim1_vp, 5), dsi.match_voiceprint(victim2_vp, 5)
+    # print("victim 1 prematch: ", prematch1[0].tolist(), prematch1[1].tolist())
+    # print("victim 2 prematch: ", prematch2[0].tolist(), prematch2[1].tolist())
+
+
+    # print('simi between victim1 and attacker:', cosine_similarity2(victim1_vp, attacker_vp, eps = 1.e-6).item())
+    # print('simi between victim2 and attacker:', cosine_similarity2(victim2_vp, attacker_vp, eps = 1.e-6).item())
+    # print('simi between victim1 and victim2 :', cosine_similarity2(victim1_vp, victim2_vp, eps = 1.e-6).item())
 
     from poisong_old import other_utte
     import poisong_old
@@ -920,15 +1285,18 @@ def generate(dataset, attacker_id, victim_id, sound_index=0, SNR_sx=10, nr_of_vu
 
         song_seg = song_data[:, seg_no*seg-h_len:(seg_no+1)*seg+h_len]
         vu = other_utte([1, *song_seg.size()], victim_corpus, ext=utte_ext)# [0:nr_of_vu, :, :]
-        vu1 = vu[victim1][0:nr_of_vu, :, :]
-        vu2 = vu[victim2][0:nr_of_vu, :, :]
-
-        ps_x, hy = poison_seg(
+        new_vu = []
+        # keep the same order as when generating voice prints
+        for v in range(len(victims)):
+            new_vu.append(vu[victims[v]][0:nr_of_vu, :, :])
+        # vu1 = vu[victim1][0:nr_of_vu, :, :]
+        # vu2 = vu[victim2][0:nr_of_vu, :, :]
+        ps_x, hy = poison_seg_multiple(
                         song_seg,
-                        victim1_vp,
+                        all_victim_vps,
                         # victim2_vp,
                         attacker_vp,
-                        vu1,
+                        new_vu,
                         # vu2,
                         dsi.model,
                         dsi.device,
